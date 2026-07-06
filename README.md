@@ -82,7 +82,7 @@ Demonstrates the aggregation of anonymous behavioral patterns at a community lev
 │  Flask (Python 3.11)                                    │
 │  - Session Orchestration                                │
 │  - Vector Embedding Generator (Vertex AI Embeddings)    │
-│  - Multi-turn Conversational Engine (Gemini 2.0 Flash)  │
+│  - Multi-turn Conversational Engine (Gemini Flash)  │
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
@@ -93,7 +93,7 @@ Demonstrates the aggregation of anonymous behavioral patterns at a community lev
 ```
 
 ### Stack Components
-*   **AI Models:** `gemini-2.0-flash` (primary chat and insights generation), `gemini-2.0-flash-lite` (backup model), and Vertex AI `text-embedding-005` (vector embedding).
+*   **AI Models:** `gemini-2.0-flash` (primary chat and insights generation), `gemini-2.0-flash-lite` (backup model), and Vertex AI `gemini-embedding-2` (vector embedding).
 *   **Database:** **Firestore** for session and answer states, **AlloyDB with pgvector** for RAG vector search.
 *   **Backend:** **Flask** API server.
 *   **Frontend:** Single Page Application built on semantic HTML, pure CSS (cinematic dark mode), and Vanilla JavaScript.
