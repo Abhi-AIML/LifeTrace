@@ -1,0 +1,420 @@
+import json
+import logging
+from google import genai
+from google.genai import types
+import server.config as config
+from server.prompts.interview import INTERVIEW_SYSTEM_PROMPT
+from server.prompts.insight import build_insight_prompt
+import re
+
+def extract_retry_after(error):
+    m = re.search(r"Please retry in ([0-9.]+)s", str(error))
+    if m:
+        return int(float(m.group(1)) + 1)
+    return None
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import the ADK agent service (initialises on import)
+try:
+    from server.services.adk_agent import run_adk_interview_turn
+    logger.info("ADK interview agent imported successfully.")
+except Exception as _adk_import_err:
+    logger.warning(f"ADK import failed — {_adk_import_err}. ADK disabled.")
+    run_adk_interview_turn = None
+
+# Initialize GenAI Client
+client = None
+if config.GEMINI_API_KEY:
+    try:
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        logger.info("GenAI client initialized for Gemini 2.0 Flash.")
+    except Exception as e:
+        logger.error(f"Failed to initialize GenAI client: {e}")
+else:
+    logger.warning("GEMINI_API_KEY environment variable is not set. Running in mock mode.")
+
+
+def generate_chat_response(history: list, new_message: str, session_id: str = "default") -> tuple[str, bool]:
+    """
+    Sends history and the new message to the interview agent.
+    Provider priority:
+      1. Google ADK Agent (manages history natively, most natural)
+      2. Gemini 2.0 Flash via raw genai client (manual history)
+      3. Gemini 2.0 Flash Lite (fallback quota)
+      4. Smart mock engine (contextual, references user's actual words)
+    """
+    # 1. Try Google ADK Agent (preferred — full native session management)
+    if run_adk_interview_turn:
+        try:
+            result = run_adk_interview_turn(session_id, new_message)
+            if result:
+                logger.info("Interview response served by Google ADK Agent.")
+                return result
+        except Exception as e:
+            logger.warning(f"ADK agent failed: {e}. Falling to raw Gemini client.")
+
+    # 2 & 3. Try raw Gemini models with manually constructed history
+    if client:
+        chat_history = []
+        for msg in history[:-1]:
+            role = "user" if msg.get("role") == "user" else "model"
+            chat_history.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg.get("content", ""))]
+                )
+            )
+
+        for model_name in ["gemini-2.5-flash"]:
+            try:
+                chat = client.chats.create(
+                    model=model_name,
+                    history=chat_history,
+                    config=types.GenerateContentConfig(
+                        system_instruction=INTERVIEW_SYSTEM_PROMPT
+                    )
+                )
+                response = chat.send_message(new_message)
+                ai_text = response.text or ""
+                is_complete = "[INTERVIEW_COMPLETE]" in ai_text
+                clean_text = ai_text.replace("[INTERVIEW_COMPLETE]", "").strip()
+                logger.info(f"Interview response served by {model_name}.")
+                return clean_text, is_complete
+
+            except Exception as e:
+                retry_after = extract_retry_after(e)
+
+                if retry_after:
+                    return f"Model is loading. Retry after {retry_after}s.", False
+
+                logger.warning(f"Failed to chat with {model_name}: {e}. Trying next...")
+
+    # 4. Smart contextual mock fallback
+    logger.warning("All Gemini providers failed or unavailable. Using contextual mock engine.")
+    return get_mock_chat_response(history, new_message)
+
+
+def generate_analysis(answers: list, rag_context: list = None) -> dict:
+    """
+    Analyzes the interview answers and returns a structured JSON dictionary.
+    Passes RAG-retrieved context to the prompt for richer analysis.
+    Falls back to a smart answer-aware mock if all LLM providers fail.
+    """
+    if not client:
+        return get_mock_analysis_data(answers)
+
+    prompt = build_insight_prompt(answers, rag_context=rag_context)
+
+    for model_name in ["gemini-2.5-flash"]:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
+            )
+            # Debug: log raw model response for troubleshooting unexpected shapes
+            try:
+                raw = (response.text or "")
+                logger.info(f"Raw analysis response (truncated): {raw[:800]}")
+            except Exception:
+                logger.info("Raw analysis response unavailable")
+
+            result = parse_json_response(response.text)
+            logger.info(f"Analysis generated by {model_name}.")
+            try:
+                logger.info(f"Parsed analysis type: {type(result)}; repr (trunc): {repr(result)[:800]}")
+            except Exception:
+                logger.info("Parsed analysis unrepresentable")
+            if result:
+                if isinstance(result, (list, tuple)) and len(result) == 2:
+                    if isinstance(result[1], bool):
+                        return {"text": result[0], "is_complete": result[1]}
+                    return result
+                if isinstance(result, dict):
+                    return result
+                if isinstance(result, str):
+                    return {"text": result, "is_complete": False}
+        except Exception as e:
+            logger.warning(f"Analysis failed with {model_name}: {e}. Trying next...")
+
+    logger.error("All analysis providers failed. Using answer-aware mock.")
+    return get_mock_analysis_data(answers)
+
+
+def parse_json_response(raw_text: str) -> dict:
+    if not raw_text:
+        raise ValueError("Empty response text")
+
+    clean_text = raw_text.strip()
+
+    # Strip common markdown fences
+    if clean_text.startswith("```json"):
+        clean_text = clean_text.replace("```json", "", 1)
+    elif clean_text.startswith("```"):
+        clean_text = clean_text[3:]
+
+    if clean_text.endswith("```"):
+        clean_text = clean_text.rsplit("```", 1)[0]
+
+    # Remove leading/trailing prose if model adds commentary around JSON
+    match = re.search(r"(\{.*\}|\[.*\])", clean_text, re.DOTALL)
+    if match:
+        clean_text = match.group(1)
+
+    clean_text = clean_text.strip()
+
+    # Try direct parse first
+    try:
+        return json.loads(clean_text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to recover from single-quoted JSON-like payloads or trailing commas
+    try:
+        cleaned = clean_text.replace("'", '"')
+        cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+        return json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Unable to parse analysis JSON: {exc}") from exc
+
+
+# --- Conversational Mock Fallback Engine ---
+
+def get_mock_chat_response(history: list, new_message: str) -> tuple[str, bool]:
+    """
+    Conversational mock chat loop that feels natural, reacts to user answers,
+    and filters out simple greetings/test inputs to keep the interview flow correct.
+    """
+    # Clean message
+    msg_clean = new_message.strip().lower()
+    
+    greetings = ["hi", "hello", "hey", "yo", "sup", "testing", "test", "is anyone there", "status", "hi lifetrace", "hi there"]
+    is_greeting = msg_clean in greetings
+    
+    mock_questions = [
+        "Before we look at your health, I want to understand your life. Not the medical version — the real one. Let's start simply: when you think about the last five years, what's the first word that comes to mind?",
+        "Walk me through the biggest change in your life since 2020.",
+        "How many times have you moved—cities, jobs, relationships—in the last decade?",
+        "When did you last feel like you were exactly where you were supposed to be?",
+        "Now let's talk about pressure. When something really difficult happens, what's your first instinct?",
+        "Do you tend to push through alone, or do you reach out to people?",
+        "Think of a time you got sick. What was happening in your life around then?",
+        "What's your relationship with rest—do you feel you deserve it?",
+        "Where in your body do you notice stress first?",
+        "Do you have any recurring physical complaints? When did they start?",
+        "Who do you call when things get hard?",
+        "What's your relationship with asking for help?"
+    ]
+    
+    # 1. Identify which mock question was last asked by the model in the history using signatures
+    signatures = [
+        "word that comes to mind",
+        "biggest change in your life",
+        "have you moved",
+        "exactly where you were supposed to be",
+        "first instinct",
+        "push through alone",
+        "time you got sick",
+        "relationship with rest",
+        "notice stress first",
+        "recurring physical complaints",
+        "who do you call",
+        "asking for help"
+    ]
+    last_q_idx = -1
+    for msg in reversed(history):
+        if msg.get("role") == "model":
+            content = msg.get("content", "").lower()
+            for idx, sig in enumerate(signatures):
+                if sig in content:
+                    last_q_idx = idx
+                    break
+            if last_q_idx != -1:
+                break
+                
+    # 2. If no question has been asked yet, ask the first one
+    if last_q_idx == -1:
+        return mock_questions[0], False
+        
+    # 3. If the user input is just a greeting/test, do NOT advance the flow.
+    # Repeat the current question dynamically.
+    if is_greeting:
+        greeting_replies = [
+            f"Hello! Let's get started on your trace. What's the first word that comes to mind when you look back at the last 5 years?",
+            f"Hi there. I want to make sure I understand your story correctly. My question was:\n\n{mock_questions[last_q_idx]}",
+            f"Hello! To build your trace, let's look at this: {mock_questions[last_q_idx]}"
+        ]
+        # Choose appropriate reply based on index
+        reply = greeting_replies[0] if last_q_idx == 0 else greeting_replies[1]
+        return reply, False
+        
+    # 4. Advance to the next question — transitions are contextual and reference the user's actual words
+    next_idx = last_q_idx + 1
+    # Trim message for inline quoting — keep it concise
+    excerpt = new_message.strip()[:60].rstrip(",. ") if new_message.strip() else "that"
+
+    if next_idx < len(mock_questions):
+        transitions = {
+            # Q0 answered → Ask about biggest change
+            1: f"\"{ excerpt }\" — that's a vivid way to describe it. Tell me more: walk me through the biggest change in your life since 2020.",
+            # Q1 answered → Ask about moves
+            2: f"That's a lot to carry through. Transitions like that have a way of reshaping everything. How many times have you moved — cities, jobs, or even relationships — in the last decade?",
+            # Q2 answered → Ask about alignment
+            3: f"Those moves add up — physically and emotionally. Amid all of that, when did you last genuinely feel like you were exactly where you were supposed to be?",
+            # Q3 answered → Ask about pressure response
+            4: f"\"{ excerpt }\" — I want to hold onto that. That sense of being in the right place matters more than people realise. Now let's talk about pressure: when something really difficult lands on you, what's your first instinct?",
+            # Q4 answered → Push through or reach out?
+            5: f"I hear that — when clarity is gone, stress fills the gap. Do you tend to push through it alone, or do you reach out to people around you?",
+            # Q5 answered → Illness and timing
+            6: f"That mix of reaching out and staying silent makes complete sense — it depends on the weight of the moment. Now I want to ask about your body: think of a time you got sick in the last few years. What was happening in your life around then?",
+            # Q6 answered → Rest
+            7: f"That timing is telling — the body often waits until it can't anymore. What's your relationship with rest? Do you feel you actually deserve it, or does rest feel like something you have to earn?",
+            # Q7 answered → Somatic location
+            8: f"\"{ excerpt }\" — rest is often the first thing we sacrifice when life speeds up. Where in your body do you notice stress arriving first?",
+            # Q8 answered → Recurring complaints
+            9: f"Your body has its own early-warning system. Do you have any recurring physical complaints — headaches, gut issues, skin flare-ups, fatigue? When did they start?",
+            # Q9 answered → Social network
+            10: f"\"{ excerpt }\" — that timeline matters. The body keeps a record even when the mind moves on. Let's shift to your social world: when things get really hard, who do you call?",
+            # Q10 answered → Asking for help
+            11: f"Those connections are a core part of your resilience architecture. Last question: what's your actual relationship with asking for help — easy, difficult, or does it depend on who's asking?"
+        }
+
+        reply = transitions.get(next_idx, f"Thank you for sharing that. Let me ask: {mock_questions[next_idx]}")
+        return reply, False
+    else:
+        return "Thank you — I have what I need to build your trace. [INTERVIEW_COMPLETE]", True
+
+
+def get_mock_analysis_data(answers: list) -> dict:
+    """
+    Answer-aware fallback: mines the actual conversation for real events,
+    dates, and themes before generating plausible chart data.
+    This runs only when all LLM providers are unavailable.
+    """
+    import re
+    import random
+
+    # Collect the raw text of all user answers
+    user_texts = [a.get("content", "") for a in answers if a.get("role") == "user"]
+    full_text = " ".join(user_texts).lower()
+
+    # ── Timeline: extract years mentioned in answers ──────────────────────────
+    years_found = sorted(set(int(y) for y in re.findall(r'\b(20[0-9]{2})\b', full_text)))
+
+    # Build timeline events from context clues in the text
+    timeline_events = []
+    keyword_event_map = [
+        (["moved", "relocat", "chennai", "city", "shifted"], "transition", "Moved / Relocation"),
+        (["job", "placed", "work", "career", "employ", "unemployed", "company", "hired"], "transition", "Career Transition"),
+        (["sick", "ill", "fever", "skin", "allerg", "hospital", "antibiotic", "fatig"], "health", "Health Signal"),
+        (["depress", "burnout", "stress", "anxiet", "overwhelm", "lonely"], "health", "Stress / Burnout Period"),
+        (["friend", "community", "connect", "relation", "family", "call", "support"], "social", "Social Support Event"),
+        (["award", "rank", "win", "achiev", "recogni", "top", "selected", "hackathon", "republic"], "general", "Major Achievement"),
+        (["college", "graduate", "passed out", "campus", "placement"], "transition", "Graduated / Campus Milestone"),
+        (["peak", "best", "smooth", "going well", "perfect"], "general", "Life at Peak"),
+    ]
+
+    used_years = set()
+    for year in years_found:
+        year_context = full_text[max(0, full_text.find(str(year))-80):full_text.find(str(year))+120]
+        matched_event = None
+        matched_type = "general"
+        for keywords, etype, label in keyword_event_map:
+            if any(kw in year_context for kw in keywords):
+                matched_event = label
+                matched_type = etype
+                break
+        if not matched_event:
+            matched_event = "Life milestone"
+        if year not in used_years:
+            timeline_events.append({"year": year, "event": matched_event, "type": matched_type})
+            used_years.add(year)
+
+    # Ensure we always have at least 3 timeline events
+    if not timeline_events:
+        current_year = 2025
+        timeline_events = [
+            {"year": current_year - 3, "event": "Major Life Shift", "type": "transition"},
+            {"year": current_year - 1, "event": "Stress Period", "type": "health"},
+            {"year": current_year, "event": "Recovery & Growth", "type": "general"},
+        ]
+
+    # ── Fingerprint Scores: infer from answer content ────────────────────────
+    def score(keywords_positive, keywords_negative, base=50):
+        pos = sum(2 for kw in keywords_positive if kw in full_text)
+        neg = sum(2 for kw in keywords_negative if kw in full_text)
+        raw = base + (pos * 5) - (neg * 5)
+        return max(10, min(95, raw))
+
+    fingerprint_scores = {
+        "stress_resilience":      score(["push through", "resilient", "recover", "bounce", "adapt"],
+                                        ["depress", "burnout", "overwhelm", "collapse", "break", "stressed"]),
+        "social_connectivity":    score(["friends", "family", "reach out", "support", "call", "community"],
+                                        ["alone", "nobody", "silent", "isolat", "lonely", "no one"]),
+        "somatic_awareness":      score(["body", "notice", "feel", "aware", "skin", "head", "stomach"],
+                                        ["ignore", "push", "numb", "not notice"]),
+        "life_stability":         score(["stable", "smooth", "consistent", "routine", "steady"],
+                                        ["moved", "change", "transition", "unstable", "roller-coaster", "unemployed"]),
+        "recovery_capacity":      score(["rest", "sleep", "relax", "recharge", "holiday"],
+                                        ["no sleep", "not resting", "exhausted", "no quality", "can't sleep"]),
+        "transition_adaptability": score(["adapt", "learned", "grew", "new city", "settled", "adjusted"],
+                                         ["difficult", "hard", "struggle", "couldn't", "never"])
+    }
+
+    # ── Insights: generated from what was said ────────────────────────────────
+    insights = []
+    if any(kw in full_text for kw in ["sick", "ill", "hospital", "moved", "transition"]):
+        insights.append({
+            "headline": "Illness coincides with life transitions",
+            "explanation": "You described physical symptoms appearing close to major moves or stressful milestones. Your immune system is registering stress through delay.",
+            "confidence": "strong"
+        })
+    if any(kw in full_text for kw in ["alone", "nobody", "silent", "depress", "lonely"]):
+        insights.append({
+            "headline": "Isolation amplifies stress load",
+            "explanation": "During your hardest moments you mentioned going silent or having no one nearby. Social disconnection significantly raises cortisol and impairs recovery.",
+            "confidence": "strong"
+        })
+    if any(kw in full_text for kw in ["sleep", "rest", "quality"]):
+        insights.append({
+            "headline": "Sleep quality as a resilience bottleneck",
+            "explanation": "You mentioned challenges with rest or sleep quality. This is often the single biggest lever on immune function and emotional regulation.",
+            "confidence": "emerging"
+        })
+    if not insights:
+        insights = [
+            {"headline": "Stress registers physically over time", "explanation": "Your body accumulates stress signals that emerge as physical complaints after the stress peak has passed.", "confidence": "emerging"},
+            {"headline": "Transitions are high-risk windows", "explanation": "Major life changes create windows of vulnerability where your baseline resilience is temporarily reduced.", "confidence": "strong"},
+        ]
+
+    # ── Interventions ─────────────────────────────────────────────────────────
+    interventions = [
+        "Schedule intentional recovery time within 48 hours of any major life change or high-pressure deadline.",
+        "Identify 2 people you can proactively contact before stress reaches a critical level — not after.",
+        "Treat sleep quality as a non-negotiable health metric: track it for 2 weeks and identify the single biggest disruptor.",
+        "Build a daily body-check habit (2 minutes) to close the gap between mental pressure and somatic awareness."
+    ]
+
+    # ── Dominant pattern ──────────────────────────────────────────────────────
+    if fingerprint_scores["social_connectivity"] < 50 and fingerprint_scores["recovery_capacity"] < 50:
+        dominant_pattern = "High-Drive, Low-Recovery, Socially Isolated Typology"
+        primary_vulnerability = "Cumulative stress without social discharge or physical recovery creates silent systemic wear."
+    elif fingerprint_scores["life_stability"] < 45:
+        dominant_pattern = "High-Transition, Adaptive Resilience Typology"
+        primary_vulnerability = "Frequent environmental changes deplete baseline resilience reserves faster than they can rebuild."
+    else:
+        dominant_pattern = "Resilient But Overloaded Typology"
+        primary_vulnerability = "Strong drive and adaptability mask an under-acknowledged need for structured recovery."
+
+    return {
+        "timeline_events": timeline_events,
+        "fingerprint_scores": fingerprint_scores,
+        "dominant_pattern": dominant_pattern,
+        "primary_vulnerability": primary_vulnerability,
+        "insights": insights[:3],
+        "interventions": interventions
+    }

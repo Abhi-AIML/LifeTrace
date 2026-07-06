@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LifeTrace — Behavioral Health Intelligence</title>
+    <meta name="description" content="LifeTrace listens to your life story and finds the patterns your doctor never had time to ask about.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main id="app-container">
+
+        <!-- ═══════════════════ Screen 1: Landing ═══════════════════ -->
+        <section id="screen-landing" class="screen active">
+            <div class="trace-pulse-line"></div>
+            <div class="landing-content">
+                <header class="landing-header">
+                    <span class="app-logo">LIFETRACE</span>
+                </header>
+                <div class="hero-section">
+                    <h1 class="hero-title">Your body has been keeping score.<br>Time to read it.</h1>
+                    <p class="hero-subtitle">LifeTrace listens to your life story — not your symptoms — and finds the patterns your doctor never had time to ask about.</p>
+                    <button id="btn-begin-trace" class="btn btn-primary btn-glow">
+                        <span>Begin your trace</span>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                    </button>
+                </div>
+                <footer class="landing-footer">
+                    <div class="footer-line"><span class="footer-number">01</span> A 10-minute conversation.</div>
+                    <div class="footer-line"><span class="footer-number">02</span> A lifetime of patterns.</div>
+                    <div class="footer-line"><span class="footer-number">03</span> Insights you've never seen before.</div>
+                </footer>
+            </div>
+        </section>
+
+        <!-- ═══════════════════ Screen 2: Interview ═══════════════════ -->
+        <section id="screen-interview" class="screen">
+            <!-- Header with progress bar -->
+            <header class="interview-header">
+                <div class="header-nav">
+                    <span class="app-logo-small">LIFETRACE</span>
+                    <div class="header-controls" style="display: flex; align-items: center; gap: 16px;">
+                        <button type="button" id="btn-toggle-voice-output" class="btn-text btn-control-voice" title="Toggle AI Voice Output" style="display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--bg-border); background: var(--bg-card); color: var(--text-primary); cursor: pointer;">
+                            <svg id="icon-voice-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                            </svg>
+                            <svg id="icon-voice-off" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                                <line x1="23" y1="9" x2="17" y2="15"></line>
+                                <line x1="17" y1="9" x2="23" y2="15"></line>
+                            </svg>
+                        </button>
+                        <button id="btn-abort-interview" class="btn-text">End session</button>
+                    </div>
+                </div>
+                <!-- Chapter Progress Indicator -->
+                <div class="chapter-progress-container">
+                    <div class="chapter-meta">
+                        <span id="chapter-number-label">Chapter 1 of 4</span>
+                        <span id="chapter-dots">●○○○</span>
+                    </div>
+                    <div class="chapter-title" id="chapter-title-label">Setting the scene</div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="chapter-progress-fill" style="width: 25%;"></div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="chat-container" id="chat-messages">
+                <!-- Messages injected dynamically -->
+            </div>
+
+            <footer class="chat-input-area">
+                <div id="voice-wave-container" class="voice-wave-container hidden">
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                </div>
+                <form id="chat-form" class="chat-input-form">
+                    <button type="button" id="btn-voice-input" class="btn-voice-input" title="Talk to LifeTrace" style="background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 0 4px; display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; transition: var(--transition-smooth);">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                            <line x1="12" y1="19" x2="12" y2="23"></line>
+                            <line x1="8" y1="23" x2="16" y2="23"></line>
+                        </svg>
+                    </button>
+                    <input type="text" id="chat-input" placeholder="Share your thoughts..." autocomplete="off" required>
+                    <button type="submit" id="chat-submit-btn" class="btn btn-icon" aria-label="Send message">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </form>
+                <div class="chat-input-hint" id="chat-input-hint">Press Enter to send or click the Mic to speak</div>
+            </footer>
+        </section>
+
+        <!-- ═══════════════════ Screen 3: Timeline Building ═══════════════════ -->
+        <section id="screen-building" class="screen">
+            <div class="building-content">
+                <div class="building-spinner">
+                    <div class="spinner-ring"></div>
+                    <div class="spinner-ring delay-1"></div>
+                    <div class="spinner-ring delay-2"></div>
+                </div>
+                <h2 class="building-title">Building your life trace</h2>
+                <div class="timeline-animation-container">
+                    <div class="timeline-axis"></div>
+                    <div class="timeline-nodes-wrapper" id="timeline-nodes"></div>
+                </div>
+                <p class="building-subtitle" id="building-subtitle">Finding the patterns hidden in your history.</p>
+            </div>
+        </section>
+
+        <!-- ═══════════════════ Screen 4: Results (Tabbed Dashboard) ═══════════════════ -->
+        <section id="screen-results" class="screen">
+            <header class="screen-header">
+                <span class="app-logo-small">LIFETRACE</span>
+                <div class="header-right">
+                    <span class="header-indicator">TRACE COMPLETE</span>
+                    <button id="btn-restart-trace" class="btn-text">Start Over</button>
+                </div>
+            </header>
+
+            <!-- Tab Navigation -->
+            <nav class="results-tabs">
+                <button class="tab-btn active" data-tab="tab-dashboard">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                    Dashboard
+                </button>
+                <button class="tab-btn" data-tab="tab-fingerprint">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    Fingerprint
+                </button>
+                <button class="tab-btn" data-tab="tab-insights">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                    Insights
+                </button>
+            </nav>
+
+            <!-- Tab: Dashboard -->
+            <div class="tab-content active" id="tab-dashboard">
+                <div class="dashboard-grid">
+                    <!-- Overall Health Score -->
+                    <div class="dash-card dash-card-score">
+                        <div class="dash-card-header">
+                            <span class="dash-label">OVERALL HEALTH SCORE</span>
+                        </div>
+                        <div class="score-ring-container">
+                            <svg class="score-ring" viewBox="0 0 120 120">
+                                <circle class="score-ring-bg" cx="60" cy="60" r="52" />
+                                <circle class="score-ring-fill" cx="60" cy="60" r="52" id="overall-score-ring" />
+                            </svg>
+                            <div class="score-ring-value" id="overall-score-value">0</div>
+                            <div class="score-ring-label">out of 100</div>
+                        </div>
+                    </div>
+
+                    <!-- Dimension Score Bars -->
+                    <div class="dash-card dash-card-metrics">
+                        <div class="dash-card-header">
+                            <span class="dash-label">BEHAVIORAL DIMENSIONS</span>
+                        </div>
+                        <div class="metric-bars" id="metric-bars-container">
+                            <!-- Bars injected dynamically -->
+                        </div>
+                    </div>
+
+                    <!-- Risk Level -->
+                    <div class="dash-card dash-card-risk">
+                        <div class="dash-card-header">
+                            <span class="dash-label">RISK ASSESSMENT</span>
+                        </div>
+                        <div class="risk-indicator" id="risk-indicator">
+                            <div class="risk-level-badge" id="risk-level-badge">MODERATE</div>
+                            <p class="risk-description" id="risk-description">...</p>
+                        </div>
+                    </div>
+
+                    <!-- Mini Timeline -->
+                    <div class="dash-card dash-card-timeline">
+                        <div class="dash-card-header">
+                            <span class="dash-label">LIFE TIMELINE</span>
+                        </div>
+                        <div class="dash-timeline" id="dash-timeline-container">
+                            <!-- Timeline items injected dynamically -->
+                        </div>
+                    </div>
+
+                    <!-- Dominant Pattern Card -->
+                    <div class="dash-card dash-card-pattern">
+                        <span class="pattern-badge">YOUR DOMINANT PATTERN</span>
+                        <h3 class="dominant-archetype" id="dash-dominant-pattern">...</h3>
+                        <p class="primary-vulnerability" id="dash-primary-vulnerability">...</p>
+                    </div>
+
+                    <!-- Quick Stats -->
+                    <div class="dash-card dash-card-stats">
+                        <div class="quick-stat">
+                            <span class="stat-value" id="stat-strongest">—</span>
+                            <span class="stat-label">Strongest Area</span>
+                        </div>
+                        <div class="quick-stat">
+                            <span class="stat-value" id="stat-weakest">—</span>
+                            <span class="stat-label">Needs Attention</span>
+                        </div>
+                        <div class="quick-stat">
+                            <span class="stat-value" id="stat-insights-count">0</span>
+                            <span class="stat-label">Patterns Found</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Fingerprint -->
+            <div class="tab-content" id="tab-fingerprint">
+                <div class="fingerprint-container">
+                    <div class="chart-column">
+                        <div class="chart-card">
+                            <div class="chart-wrapper" id="radar-chart-container"></div>
+                        </div>
+                    </div>
+                    <div class="details-column">
+                        <div class="pattern-badge">YOUR BEHAVIORAL FINGERPRINT</div>
+                        <h2 class="dominant-archetype" id="dominant-archetype-label">...</h2>
+                        <p class="primary-vulnerability" id="primary-vulnerability-label">...</p>
+                        <div class="dimension-legend" id="dimension-legend">
+                            <!-- Legend items injected dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Insights -->
+            <div class="tab-content" id="tab-insights">
+                <div class="insights-container">
+                    <div class="insights-column">
+                        <h3 class="column-title">Surfaced Patterns</h3>
+                        <div class="insights-list" id="insights-list-container"></div>
+                    </div>
+                    <div class="interventions-column">
+                        <span class="section-label">TAILORED TO HOW YOU'RE WIRED</span>
+                        <h3 class="intervention-intro" id="intervention-intro-label">...</h3>
+                        <ul class="interventions-list" id="interventions-list-container"></ul>
+                    </div>
+                </div>
+                <footer class="community-impact-wrapper">
+                    <div class="community-impact-card">
+                        <h4 class="community-title">From individual insight to community intelligence</h4>
+                        <p class="community-text">LifeTrace anonymously aggregates behavioral patterns across communities — giving public health systems early warning signals without anyone sharing a medical record.</p>
+                    </div>
+                </footer>
+            </div>
+        </section>
+
+    </main>
+    <script src="app.js"></script>
+</body>
+</html>
